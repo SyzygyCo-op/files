@@ -1,0 +1,10 @@
+name = "syzygy-files"
+main = "build/index.js"
+compatibility_date = "2025-11-12"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[[routes]]
+pattern = "syzygysf.com/files/*"
+zone_name = "syzygysf.com"
