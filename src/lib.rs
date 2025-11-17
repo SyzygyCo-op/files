@@ -2,6 +2,12 @@ use worker::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
+struct DriveShorcutDetails {
+    #[serde(rename = "targetId")]
+    target_id: String,
+}
+
+#[derive(Deserialize, Serialize)]
 struct DriveFile {
     id: String,
     name: String,
@@ -11,6 +17,8 @@ struct DriveFile {
     web_view_link: Option<String>,
     #[serde(rename = "webContentLink")]
     web_content_link: Option<String>,
+    #[serde(rename = "shortcutDetails")]
+    shortcut_details: Option<DriveShorcutDetails>,
 }
 
 #[derive(Deserialize)]
@@ -102,7 +110,7 @@ async fn list_files(api_key: &str, folder_id: &str) -> worker::Result<Response> 
 async fn serve_file_by_name(api_key: &str, folder_id: &str, file_name: &str) -> worker::Result<Response> {
     // First, search for the file by name in the specified folder
     let search_url = format!(
-        "https://www.googleapis.com/drive/v3/files?q=name='{}'+and+'{}'+in+parents&supportsAllDrives=true&includeItemsFromAllDrives=true&key={}",
+        "https://www.googleapis.com/drive/v3/files?q=name='{}'+and+'{}'+in+parents&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,shortcutDetails)&key={}",
         file_name.replace("'", "\\'"), folder_id, api_key
     );
     
@@ -123,6 +131,33 @@ async fn serve_file_by_name(api_key: &str, folder_id: &str, file_name: &str) -> 
     
     // Use the first matching file (in case of duplicates)
     let file_info = &search_result.files[0];
+
+    if let Some(shortcut_details) = &file_info.shortcut_details {
+        console_debug!("File is a shortcut, resolving target ID: {}", shortcut_details.target_id);
+        // If it's a shortcut, we need to get the target file info
+        let target_file_id = &shortcut_details.target_id;
+        let target_url = format!(
+            "https://www.googleapis.com/drive/v3/files/{}?supportsAllDrives=true&includeItemsFromAllDrives=true&key={}",
+            target_file_id, api_key
+        );
+        
+        let target_request = Request::new(&target_url, Method::Get)?;
+        let mut target_response = Fetch::Request(target_request).send().await?;
+        
+        let target_status = target_response.status_code();
+        if !(200..300).contains(&target_status) {
+            return Response::error("Failed to fetch target file of shortcut", 500);
+        }
+        
+        let target_file_info: DriveFile = target_response.json().await?;
+
+        return serve_file_by_id(api_key, &target_file_info).await;
+    } else {
+        return serve_file_by_id(api_key, file_info).await;
+    }
+}
+
+async fn serve_file_by_id(api_key: &str, file_info: &DriveFile) -> worker::Result<Response> {
     let file_id = &file_info.id;
     
     // Download the file content
